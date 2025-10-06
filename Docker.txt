@@ -1,0 +1,89 @@
+
+Files to create: Dockerfile, .dockerignore, entrypoint.sh, docker-compose.yml
+
+> sudo nano Dockerfile
+
+# Use lightweight Python image
+FROM python:3.11-slim
+
+# Set working dir
+WORKDIR /app
+
+# System deps (mysql connector may need build tools on some images; try to keep minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install
+COPY requirement.txt /app/requirement.txt
+RUN pip install --no-cache-dir -r /app/requirement.txt
+
+# Copy app files
+COPY . /app
+
+# Expose port
+EXPOSE 5000
+
+# Entrypoint
+CMD ["python", "app.py"]
+
+
+.dockerignore
+
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.vscode
+.git
+
+
+> sudo nano docker-compose.yml
+
+version: "3.8"
+services:
+  db:
+    image: mysql:8.0
+    container_name: todo-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: mytododb
+      MYSQL_USER: todo_user
+      MYSQL_PASSWORD: password
+    volumes:
+      - todo-db-data:/var/lib/mysql
+      - ./todo-db.sql:/docker-entrypoint-initdb.d/todo-db.sql:ro
+    ports:
+      - "3306:3306"
+
+  web:
+    build: .
+    container_name: todo-flask
+    depends_on:
+      - db
+    environment:
+      DB_HOST: db
+      DB_USER: todo_user
+      DB_PASSWORD: password
+      DB_NAME: mytododb
+      SECRET_KEY: supersecretkey
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+
+volumes:
+  todo-db-data:
+
+
+Run locally
+
+# build & start
+> docker compose up --build -d
+
+# view logs
+> docker compose logs -f web
+
+
