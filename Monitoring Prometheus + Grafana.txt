@@ -1,0 +1,114 @@
+ Monitoring: Prometheus + Grafana + Alerts
+1) Install Prometheus & Node/Pod exporters
+
+For k8s, easiest is to deploy the Prometheus Community Helm chart (or kube-prometheus-stack). Example (Helm):
+
+# add repo
+> helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+> helm repo update
+
+# install kube-prometheus-stack
+> helm install prometheus prometheus-community/kube-prometheus-stack --namespace monitoring --create-namespace
+
+
+This brings Prometheus, Alertmanager, node-exporter, kube-state-metrics, and Grafana.
+
+(If you prefer manifest-based, use kube-prometheus manifests. Helm is quicker.)
+
+2) Scrape your Flask app
+
+Expose app metrics — best approach: instrument Flask with Prometheus client (python client). Example minimal instrumentation (add to app.py):
+
+> sudo nano app.py
+
+from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Histogram
+from flask import Response
+
+REQUESTS = Counter('app_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'http_status'])
+REQUEST_LATENCY = Histogram('app_request_latency_seconds', 'Request latency', ['endpoint'])
+
+@app.before_request
+def before():
+    request._start_time = datetime.datetime.now()
+
+@app.after_request
+def after(response):
+    try:
+        delta = (datetime.datetime.now() - request._start_time).total_seconds()
+        REQUEST_LATENCY.labels(endpoint=request.path).observe(delta)
+        REQUESTS.labels(method=request.method, endpoint=request.path, http_status=response.status_code).inc()
+    except Exception:
+        pass
+    return response
+
+@app.route('/metrics')
+def metrics():
+    return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
+
+
+Make sure prometheus_client is added to requirement.txt.
+
+Then configure Prometheus scrape config (if using kube-prometheus-stack it's easy: create a ServiceMonitor CR to scrape the todo-app service).
+
+Example ServiceMonitor (when using kube-prometheus-stack):
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: todo-app-sm
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: todo-app
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+  namespaceSelector:
+    any: true
+
+
+Ensure todo-app service has port named http.
+
+3) Grafana dashboards
+
+Grafana comes with the stack; add a dashboard JSON (simple panel showing request rate and latency). In Grafana, you can import JSON (Dashboard → Import). Example minimal panel queries:
+
+Request rate: sum(rate(app_requests_total[1m])) by (endpoint)
+
+Latency: histogram_quantile(0.95, sum(rate(app_request_latency_seconds_bucket[5m])) by (le, endpoint))
+
+You can automate Grafana dashboard provisioning with ConfigMaps or the Grafana Operator.
+
+4) Alerts and Notifications
+
+Example PrometheusRule for high error rate:
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: todo-app-rules
+spec:
+  groups:
+    - name: todo.rules
+      rules:
+        - alert: HighErrorRate
+          expr: sum(rate(app_requests_total{http_status=~"5.."}[5m])) / sum(rate(app_requests_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "High 5xx error rate for todo-app"
+            description: "More than 5% of requests return 5xx in the last 5 minutes."
+
+
+Alertmanager (installed with kube-prometheus-stack) can send notifications to email, Slack, or webhook. Configure values.yaml for Alertmanager with your notification endpoints or add Secrets for credentials.
+
+Integration tips (CI/CD + Monitoring)
+
+CI (GitHub Actions) builds and pushes the image. Add a final step to helm upgrade --install or let ArgoCD pick up the Git change. I recommend pushing image + updating values.yaml (image tag) via CI, commit a chart change or tag, and ArgoCD will sync automatically.
+
+Add Prometheus ServiceMonitor templates in your Helm chart so when chart is installed Prometheus picks up metrics automatically.
