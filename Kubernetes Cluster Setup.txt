@@ -1,0 +1,46 @@
+Kubernetes Cluster Setup
+1️⃣ Create two VM machines
+
+VM1: Kubernetes Master (control-plane)
+
+VM2: Kubernetes Worker (node)
+
+(You can use VirtualBox, VMware, or Cloud VMs.)
+
+2️⃣ Install kubeadm, kubelet, kubectl on both VMs
+> sudo apt update && sudo apt install -y apt-transport-https ca-certificates curl
+> sudo curl -fsSLo /usr/share/keyrings/kubernetes-archive-keyring.gpg \
+https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+
+> echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] \
+https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+> sudo apt update
+> sudo apt install -y kubelet kubeadm kubectl
+> sudo apt-mark hold kubelet kubeadm kubectl
+
+3️⃣ Initialize Master node
+
+(on VM1):
+
+> sudo kubeadm init --pod-network-cidr=10.244.0.0/16
+
+
+Set up local kubeconfig:
+
+> mkdir -p $HOME/.kube
+> sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+> sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+
+Install a network plugin (Flannel example):
+
+> kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+
+4️⃣ Join Worker node
+
+(on VM2, run the kubeadm join ... command that the master outputs.)
+
+Check nodes:
+
+> kubectl get nodes
